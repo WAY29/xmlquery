@@ -45,6 +45,7 @@ type Node struct {
 	Prefix       string
 	NamespaceURI string
 	Attr         []Attr
+	XPath        string
 
 	level int // node level in the tree
 }
@@ -96,6 +97,59 @@ func newXMLName(name string) xml.Name {
 	}
 	return xml.Name{
 		Local: name,
+	}
+}
+
+func (n *Node) calcNodeHash() string {
+	data := n.Data
+	level := n.level
+	if n.Type == TextNode || n.Type == CharDataNode {
+		if n.Parent != nil {
+			level = n.Parent.level
+			data = n.Parent.Data
+		} else {
+			data = ""
+		}
+	}
+
+	return fmt.Sprintf("%d:%d:%s", n.Type, level, data)
+}
+
+func (n *Node) calcAndSetNodeXPath(p *parser) {
+	if n.Type == DeclarationNode || n.Type == DocumentNode {
+		return
+	}
+	suffix := n.Data
+	switch n.Type {
+	case TextNode, CharDataNode:
+		// check if the same text node already exists, if so, the second one should be ignored
+		if p != nil {
+			calcHash := n.calcNodeHash()
+			if _, ok := p.levelsCount[calcHash]; ok {
+				return
+			}
+		}
+		suffix = "text()"
+	case CommentNode:
+		suffix = "comment()"
+	case AttributeNode:
+		suffix = "@" + suffix
+	case ElementNode:
+		if p != nil {
+			count, _ := p.levelsCount[n.calcNodeHash()]
+			suffix = fmt.Sprintf("%s[%d]", suffix, count+1)
+		}
+		if n.Prefix != "" {
+			suffix = fmt.Sprintf("%s:%s", n.Prefix, suffix)
+		}
+	}
+
+	if n.Parent == nil {
+		n.XPath = "/"
+	} else {
+		if suffix != "" {
+			n.XPath = n.Parent.XPath + "/" + suffix
+		}
 	}
 }
 
@@ -197,7 +251,6 @@ func outputXML(b *strings.Builder, n *Node, preserveSpaces bool, config *outputC
 
 // OutputXML returns the text that including tags name.
 func (n *Node) OutputXML(self bool) string {
-
 	config := &outputConfiguration{
 		printSelf:              true,
 		emptyElementTagSupport: false,
@@ -217,7 +270,6 @@ func (n *Node) OutputXML(self bool) string {
 
 // OutputXMLWithOptions returns the text that including tags name.
 func (n *Node) OutputXMLWithOptions(opts ...OutputOption) string {
-
 	config := &outputConfiguration{}
 	// Set the options
 	for _, opt := range opts {

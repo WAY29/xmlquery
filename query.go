@@ -52,13 +52,16 @@ func getCurrentNode(it *xpath.NodeIterator) *Node {
 			Type: TextNode,
 			Data: n.Value(),
 		}
-		return &Node{
+		node := &Node{
 			Parent:     n.curr,
 			Type:       AttributeNode,
 			Data:       n.LocalName(),
 			FirstChild: childNode,
 			LastChild:  childNode,
 		}
+		node.calcAndSetNodeXPath(nil)
+
+		return node
 	}
 	return n.curr
 }
@@ -174,7 +177,6 @@ func (x *NodeNavigator) LocalName() string {
 		return x.curr.Attr[x.attr].Name.Local
 	}
 	return x.curr.Data
-
 }
 
 func (x *NodeNavigator) Prefix() string {

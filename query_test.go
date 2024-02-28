@@ -42,9 +42,8 @@ const xmlDoc = `
    </book>
 </catalog>`
 
-var doc = loadXML(xmlDoc)
-
 func TestXPath(t *testing.T) {
+	doc := loadXML(xmlDoc)
 	if list := Find(doc, "//book"); len(list) != 3 {
 		t.Fatal("count(//book) != 3")
 	}
@@ -104,6 +103,7 @@ func TestInvalidXPathExpression(t *testing.T) {
 }
 
 func TestNavigator(t *testing.T) {
+	doc := loadXML(xmlDoc)
 	nav := &NodeNavigator{curr: doc, root: doc, attr: -1}
 	nav.MoveToChild() // New Line
 	nav.MoveToNext()  // catalog
@@ -116,7 +116,7 @@ func TestNavigator(t *testing.T) {
 		t.Fatal("node type not CommentNode")
 	}
 	nav.Value()
-	nav.MoveToNext() //book
+	nav.MoveToNext() // book
 	nav.MoveToChild()
 	nav.MoveToNext() // book/author
 	if nav.LocalName() != "author" {
@@ -161,12 +161,12 @@ func loadXML(s string) *Node {
 }
 
 func TestMissingTextNodes(t *testing.T) {
-    doc := loadXML(`
+	doc := loadXML(`
         <?xml version="1.0" encoding="utf-8"?>
         <corpus><p>Lorem <a>ipsum</a> dolor</p></corpus>
     `)
-    results := Find(doc, "//text()")
-    if len(results) != 3 {
-        t.Fatalf("Expected text nodes 3, got %d", len(results))
-    }
+	results := Find(doc, "//text()")
+	if len(results) != 3 {
+		t.Fatalf("Expected text nodes 3, got %d", len(results))
+	}
 }

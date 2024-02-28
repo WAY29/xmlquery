@@ -54,6 +54,7 @@ type parser struct {
 	decoder             *xml.Decoder
 	doc                 *Node
 	level               int
+	levelsCount         map[string]int // key is hash
 	prev                *Node
 	streamElementXPath  *xpath.Expr   // Under streaming mode, this specifies the xpath to the target element node(s).
 	streamElementFilter *xpath.Expr   // If specified, it provides further filtering on the target element.
@@ -67,16 +68,35 @@ type parser struct {
 func createParser(r io.Reader) *parser {
 	reader := newCachedReader(bufio.NewReader(r))
 	p := &parser{
-		decoder: xml.NewDecoder(reader),
-		doc:     &Node{Type: DocumentNode},
-		level:   0,
-		reader:  reader,
+		decoder:     xml.NewDecoder(reader),
+		doc:         &Node{Type: DocumentNode},
+		level:       0,
+		levelsCount: make(map[string]int),
+		reader:      reader,
 	}
 	if p.decoder.CharsetReader == nil {
 		p.decoder.CharsetReader = charset.NewReaderLabel
 	}
 	p.prev = p.doc
 	return p
+}
+
+func NewNode(typ NodeType, data string, level int) *Node {
+	node := &Node{
+		Type:  typ,
+		Data:  data,
+		level: level,
+	}
+	return node
+}
+
+func (p *parser) updateLevelsCount(node *Node) {
+	nodeHash := node.calcNodeHash()
+	if _, ok := p.levelsCount[nodeHash]; ok {
+		p.levelsCount[nodeHash]++
+	} else {
+		p.levelsCount[nodeHash] = 0
+	}
 }
 
 func (p *parser) parse() (*Node, error) {
@@ -86,6 +106,8 @@ func (p *parser) parse() (*Node, error) {
 
 	var streamElementNodeCounter int
 	for {
+		var node *Node
+
 		p.reader.StartCaching()
 		tok, err := p.decoder.Token()
 		p.reader.StopCaching()
@@ -100,15 +122,13 @@ func (p *parser) parse() (*Node, error) {
 				attributes := make([]Attr, 1)
 				attributes[0].Name = xml.Name{Local: "version"}
 				attributes[0].Value = "1.0"
-				node := &Node{
-					Type:  DeclarationNode,
-					Data:  "xml",
-					Attr:  attributes,
-					level: 1,
-				}
-				AddChild(p.prev, node)
 				p.level = 1
+				node = NewNode(DeclarationNode, "xml", p.level)
+				node.Attr = attributes
+				AddChild(p.prev, node)
 				p.prev = node
+				p.updateLevelsCount(node)
+				node.calcAndSetNodeXPath(p)
 			}
 
 			for _, att := range tok.Attr {
@@ -140,13 +160,8 @@ func (p *parser) parse() (*Node, error) {
 				}
 			}
 
-			node := &Node{
-				Type:         ElementNode,
-				Data:         tok.Name.Local,
-				NamespaceURI: tok.Name.Space,
-				Attr:         attributes,
-				level:        p.level,
-			}
+			node = NewNode(ElementNode, tok.Name.Local, p.level)
+			node.NamespaceURI, node.Attr = tok.Name.Space, attributes
 
 			if p.level == p.prev.level {
 				AddSibling(p.prev, node)
@@ -227,7 +242,7 @@ func (p *parser) parse() (*Node, error) {
 				nodeType = CharDataNode
 			}
 
-			node := &Node{Type: nodeType, Data: string(tok), level: p.level}
+			node = NewNode(nodeType, string(tok), p.level)
 			if p.level == p.prev.level {
 				AddSibling(p.prev, node)
 			} else if p.level > p.prev.level {
@@ -239,7 +254,7 @@ func (p *parser) parse() (*Node, error) {
 				AddSibling(p.prev.Parent, node)
 			}
 		case xml.Comment:
-			node := &Node{Type: CommentNode, Data: string(tok), level: p.level}
+			node = NewNode(CommentNode, string(tok), p.level)
 			if p.level == p.prev.level {
 				AddSibling(p.prev, node)
 			} else if p.level > p.prev.level {
@@ -254,7 +269,7 @@ func (p *parser) parse() (*Node, error) {
 			if p.prev.Type != DeclarationNode {
 				p.level++
 			}
-			node := &Node{Type: DeclarationNode, Data: tok.Target, level: p.level}
+			node = NewNode(DeclarationNode, tok.Target, p.level)
 			pairs := strings.Split(string(tok.Inst), " ")
 			for _, pair := range pairs {
 				pair = strings.TrimSpace(pair)
@@ -275,6 +290,10 @@ func (p *parser) parse() (*Node, error) {
 			p.prev = node
 		case xml.Directive:
 		}
+		if node != nil {
+			p.updateLevelsCount(node)
+			node.calcAndSetNodeXPath(p)
+		}
 	}
 }
 
@@ -290,37 +309,43 @@ type StreamParser struct {
 // scenarios.
 //
 // Scenario 1: simple case:
-//  xml := `<AAA><BBB>b1</BBB><BBB>b2</BBB></AAA>`
-//  sp, err := CreateStreamParser(strings.NewReader(xml), "/AAA/BBB")
-//  if err != nil {
-//      panic(err)
-//  }
-//  for {
-//      n, err := sp.Read()
-//      if err != nil {
-//          break
-//      }
-//      fmt.Println(n.OutputXML(true))
-//  }
+//
+//	xml := `<AAA><BBB>b1</BBB><BBB>b2</BBB></AAA>`
+//	sp, err := CreateStreamParser(strings.NewReader(xml), "/AAA/BBB")
+//	if err != nil {
+//	    panic(err)
+//	}
+//	for {
+//	    n, err := sp.Read()
+//	    if err != nil {
+//	        break
+//	    }
+//	    fmt.Println(n.OutputXML(true))
+//	}
+//
 // Output will be:
-//   <BBB>b1</BBB>
-//   <BBB>b2</BBB>
+//
+//	<BBB>b1</BBB>
+//	<BBB>b2</BBB>
 //
 // Scenario 2: advanced case:
-//  xml := `<AAA><BBB>b1</BBB><BBB>b2</BBB></AAA>`
-//  sp, err := CreateStreamParser(strings.NewReader(xml), "/AAA/BBB", "/AAA/BBB[. != 'b1']")
-//  if err != nil {
-//      panic(err)
-//  }
-//  for {
-//      n, err := sp.Read()
-//      if err != nil {
-//          break
-//      }
-//      fmt.Println(n.OutputXML(true))
-//  }
+//
+//	xml := `<AAA><BBB>b1</BBB><BBB>b2</BBB></AAA>`
+//	sp, err := CreateStreamParser(strings.NewReader(xml), "/AAA/BBB", "/AAA/BBB[. != 'b1']")
+//	if err != nil {
+//	    panic(err)
+//	}
+//	for {
+//	    n, err := sp.Read()
+//	    if err != nil {
+//	        break
+//	    }
+//	    fmt.Println(n.OutputXML(true))
+//	}
+//
 // Output will be:
-//   <BBB>b2</BBB>
+//
+//	<BBB>b2</BBB>
 //
 // As the argument names indicate, streamElementXPath should be used for
 // providing xpath query pointing to the target element node only, no extra

@@ -8,6 +8,36 @@ import (
 	"testing"
 )
 
+func recursiveXMLNode(node *Node, callback func(node *Node)) {
+	nodesMap := make(map[*Node]struct{})
+
+	var recursiveXMLNode func(node *Node)
+
+	recursiveXMLNode = func(node *Node) {
+		if node == nil {
+			return
+		}
+		if _, ok := nodesMap[node]; ok {
+			return
+		}
+		nodesMap[node] = struct{}{}
+
+		for sibling := node.PrevSibling; sibling != nil; sibling = sibling.PrevSibling {
+			recursiveXMLNode(sibling)
+		}
+		for sibling := node.NextSibling; sibling != nil; sibling = sibling.NextSibling {
+			recursiveXMLNode(sibling)
+		}
+
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			recursiveXMLNode(child)
+		}
+		callback(node)
+	}
+
+	recursiveXMLNode(node)
+}
+
 func findRoot(n *Node) *Node {
 	if n == nil {
 		return nil
@@ -73,6 +103,28 @@ func testTrue(t *testing.T, v bool) {
 		return
 	}
 	t.Fatal("expected value is true, but got false")
+}
+
+func testNodeXPath(t *testing.T, xml string) {
+	doc, _ := Parse(strings.NewReader(xml))
+	t.Helper()
+	recursiveXMLNode(doc, func(node *Node) {
+		// DeclarationNode has no XPath
+		if node.Type == DeclarationNode || node.Type == DocumentNode {
+			return
+		}
+		if node.XPath == "" {
+			return
+		}
+		gotNode, err := Query(doc, node.XPath)
+		if err != nil {
+			t.Fatalf("node[%s] xpath error: %v", node.XPath, err)
+		}
+		if gotNode != node {
+			t.Logf("%p != %p", node, gotNode)
+			t.Fatalf("node[%s] xpath error: \ngot node:\n\t%#v\nexpected node:\n\t%#v", node.XPath, gotNode, node)
+		}
+	})
 }
 
 // Given a *Node, verify that all the pointers (parent, first child, next sibling, etc.) of
@@ -184,7 +236,6 @@ func TestSetAttr(t *testing.T) {
 			expected: `< k1="v2"></>`,
 		},
 	} {
-
 		t.Run(test.name, func(t *testing.T) {
 			test.n.SetAttr(test.key, test.val)
 			testValue(t, test.n.OutputXML(true), test.expected)
@@ -224,7 +275,6 @@ func TestRemoveAttr(t *testing.T) {
 			expected: `<></>`,
 		},
 	} {
-
 		t.Run(test.name, func(t *testing.T) {
 			test.n.RemoveAttr(test.key)
 			testValue(t, test.n.OutputXML(true), test.expected)
@@ -362,7 +412,6 @@ func TestEscapeOutputValue(t *testing.T) {
 	if !strings.Contains(escapedInnerText, "&lt;*&gt;") {
 		t.Fatal("Inner Text has not been escaped")
 	}
-
 }
 
 func TestUnnecessaryEscapeOutputValue(t *testing.T) {
@@ -388,7 +437,6 @@ func TestUnnecessaryEscapeOutputValue(t *testing.T) {
 	if strings.Contains(escapedInnerText, "&#xA") {
 		t.Fatal("\\t has been escaped unnecessarily")
 	}
-
 }
 
 func TestHtmlUnescapeStringOriginString(t *testing.T) {
@@ -409,7 +457,6 @@ func TestHtmlUnescapeStringOriginString(t *testing.T) {
 	if !strings.Contains(escapedInnerText, "&amp;#48;\t\t") {
 		t.Fatal("Inner Text should keep plain text")
 	}
-
 }
 
 func TestOutputXMLWithNamespacePrefix(t *testing.T) {
@@ -610,4 +657,18 @@ func TestOutputXMLWithPreserveSpaceOption(t *testing.T) {
 	if !strings.Contains(resultWithoutSpace, ">Robert<") {
 		t.Errorf("output was not expected. expected %v but got %v", " Robert ", resultWithoutSpace)
 	}
+}
+
+func TestNodeXPath(t *testing.T) {
+	s := `<?xml version="1.0" encoding="UTF-8"?><S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/"><S:Body test="1"><ns2:Fault xmlns:ns2="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ns3="http://www.w3.org/2003/05/soap-envelope"><faultcode>ns2:Client</faultcode><faultstring>This is a client fault</faultstring></ns2:Fault></S:Body></S:Envelope>`
+	// testNodeXPath(t, s)
+
+	s = `<?xml version="1.0" encoding="utf-8"?>
+	<class_list>
+		<student>
+			<name> Robert </name>
+			<grade>A+</grade>
+		</student>
+	</class_list>`
+	testNodeXPath(t, s)
 }
